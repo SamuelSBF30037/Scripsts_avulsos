@@ -1,0 +1,265 @@
+// ==========================================
+// SCRIPT PARA EXCLUSÃO DE DUPLICATAS DO BOLETIM
+// ==========================================
+
+(() => {
+    // CONFIGURAÇÃO - AJUSTE A ASSINATURA AQUI
+    const ASSINATURA = "SBF"; // Altere aqui para a assinatura desejada
+    
+    console.clear();
+    console.log("🔍 EXCLUSÃO DE DUPLICATAS DO BOLETIM");
+    console.log("====================================");
+    console.log(`📝 Assinatura configurada: "${ASSINATURA}"`);
+    console.log("");
+    
+    /* 0️⃣ Silencia qualquer window.confirm()/alert() que o sistema abra */
+    window.__oldConfirm = window.confirm;
+    window.__oldAlert = window.alert;
+    window.confirm = (msg = '') => {
+        console.log('🔔 Confirmação auto‑aceita:', msg);
+        return true; // responde "OK" automaticamente
+    };
+    window.alert = (msg = '') => {
+        console.log('🔔 Alerta ignorado:', msg);
+    };
+    
+    /* 1️⃣ Coleta todas as tabelas do boletim */
+    const tabelas = [...document.querySelectorAll('table.frm-borda')];
+    console.log(`📋 Total de itens encontrados: ${tabelas.length}`);
+    
+    if (tabelas.length === 0) {
+        console.log("❌ Nenhuma tabela encontrada. Verifique se está na página correta.");
+        return;
+    }
+    
+    /* 2️⃣ Extrai informações de cada item */
+    const itens = tabelas.map((tabela, index) => {
+        const tdConteudo = tabela.querySelector('td[width="90%"]');
+        const btnApagar = tabela.querySelector('input.frm-botao2[value*="Apagar"]');
+        
+        if (!tdConteudo || !btnApagar) {
+            return null;
+        }
+        
+        const texto = tdConteudo.textContent.trim();
+        
+        // Buscar padrão: número - O(A) ... ASSINATURA
+        const padrao = new RegExp(`(\\d+) - O\\(A\\)[\\s\\S]*?${ASSINATURA.replace('.', '\\.')}`, 'i');
+        const match = texto.match(padrao);
+        const numeroBoletim = match ? parseInt(match[1]) : null;
+        
+        return {
+            indice: index,
+            tabela: tabela,
+            texto: texto,
+            numeroBoletim: numeroBoletim,
+            btnApagar: btnApagar,
+            hash: criarHashConteudo(texto) // Hash para comparar conteúdo similar
+        };
+    }).filter(item => item !== null && item.numeroBoletim !== null);
+    
+    console.log(`✅ Itens válidos com numeração: ${itens.length}`);
+    
+    if (itens.length === 0) {
+        console.log("❌ Nenhum item válido encontrado com o padrão de numeração especificado.");
+        return;
+    }
+    
+    /* 3️⃣ Identifica duplicatas por número do boletim */
+    const duplicatasPorNumero = {};
+    const duplicatasPorConteudo = {};
+    
+    itens.forEach(item => {
+        // Agrupa por número do boletim
+        if (!duplicatasPorNumero[item.numeroBoletim]) {
+            duplicatasPorNumero[item.numeroBoletim] = [];
+        }
+        duplicatasPorNumero[item.numeroBoletim].push(item);
+        
+        // Agrupa por hash do conteúdo (para detectar conteúdo similar)
+        if (!duplicatasPorConteudo[item.hash]) {
+            duplicatasPorConteudo[item.hash] = [];
+        }
+        duplicatasPorConteudo[item.hash].push(item);
+    });
+    
+    /* 4️⃣ Identifica itens duplicados para exclusão (MANTÉM SEMPRE UM DE CADA) */
+    const itensParaExcluir = [];
+    const itensPreservados = [];
+    
+    // Duplicatas por número (mantém o PRIMEIRO, exclui os DEMAIS)
+    Object.entries(duplicatasPorNumero).forEach(([numero, lista]) => {
+        if (lista.length > 1) {
+            console.log(`🔄 Número ${numero} encontrado ${lista.length} vezes`);
+            
+            // PRESERVA: o primeiro item encontrado
+            const itemPreservado = lista[0];
+            itensPreservados.push({
+                numero: numero,
+                motivo: 'Primeiro encontrado',
+                item: itemPreservado
+            });
+            console.log(`   ✅ MANTENDO: ${itemPreservado.texto.substring(0, 80)}...`);
+            
+            // EXCLUI: todos os demais (do segundo em diante)
+            lista.slice(1).forEach((item, index) => {
+                itensParaExcluir.push({
+                    ...item,
+                    motivo: `Duplicata ${index + 2}/${lista.length} do número ${numero}`,
+                    tipo: 'numero'
+                });
+                console.log(`   ❌ EXCLUINDO: ${item.texto.substring(0, 80)}...`);
+            });
+            console.log(`   📊 Resultado: 1 mantido, ${lista.length - 1} excluído(s)`);
+            console.log("");
+        }
+    });
+    
+    // Duplicatas por conteúdo similar (mantém o de MENOR número, exclui os demais)
+    Object.entries(duplicatasPorConteudo).forEach(([hash, lista]) => {
+        if (lista.length > 1) {
+            // Verifica se não são apenas duplicatas de número já processadas
+            const numerosUnicos = [...new Set(lista.map(item => item.numeroBoletim))];
+            if (numerosUnicos.length > 1) {
+                console.log(`📝 Conteúdo similar encontrado ${lista.length} vezes (números: ${numerosUnicos.join(', ')})`);
+                
+                // Ordena por número crescente para manter o menor
+                lista.sort((a, b) => a.numeroBoletim - b.numeroBoletim);
+                
+                // PRESERVA: o item com menor número
+                const itemPreservado = lista[0];
+                const jaPreservado = itensPreservados.some(p => p.item.indice === itemPreservado.indice);
+                if (!jaPreservado) {
+                    itensPreservados.push({
+                        numero: itemPreservado.numeroBoletim,
+                        motivo: 'Menor número com este conteúdo',
+                        item: itemPreservado
+                    });
+                }
+                console.log(`   ✅ MANTENDO: Número ${itemPreservado.numeroBoletim}`);
+                
+                // EXCLUI: todos os demais (apenas se não já marcados para exclusão)
+                lista.slice(1).forEach((item, index) => {
+                    const jaExcluido = itensParaExcluir.some(excluir => excluir.indice === item.indice);
+                    if (!jaExcluido) {
+                        itensParaExcluir.push({
+                            ...item,
+                            motivo: `Conteúdo duplicado (mantendo número ${itemPreservado.numeroBoletim})`,
+                            tipo: 'conteudo'
+                        });
+                        console.log(`   ❌ EXCLUINDO: Número ${item.numeroBoletim}`);
+                    }
+                });
+                console.log(`   📊 Resultado: Número ${itemPreservado.numeroBoletim} mantido, demais excluídos`);
+                console.log("");
+            }
+        }
+    });
+    
+    console.log("");
+    console.log("📊 RESUMO DA ANÁLISE:");
+    console.log("=====================");
+    console.log(`🔢 Total de números únicos: ${Object.keys(duplicatasPorNumero).length}`);
+    console.log(`📝 Total de conteúdos únicos: ${Object.keys(duplicatasPorConteudo).length}`);
+    console.log(`✅ Itens que serão PRESERVADOS: ${itens.length - itensParaExcluir.length}`);
+    console.log(`❌ Itens que serão EXCLUÍDOS: ${itensParaExcluir.length}`);
+    console.log(`📊 Proporção: ${itensParaExcluir.length}/${itens.length} (${((itensParaExcluir.length/itens.length)*100).toFixed(1)}% serão excluídos)`);
+    
+    if (itensParaExcluir.length === 0) {
+        console.log("");
+        console.log("✅ NENHUMA DUPLICATA ENCONTRADA!");
+        console.log("=================================");
+        console.log("🎉 Todos os itens são únicos - nada será excluído.");
+        return;
+    }
+    
+    console.log("");
+    console.log("⚖️  GARANTIA: SEMPRE MANTEMOS PELO MENOS UM DE CADA!");
+    console.log("====================================================");
+    console.log("🛡️  Para cada grupo de duplicatas, UM item é preservado");
+    console.log("❌ Apenas os itens extras/duplicados serão excluídos");
+    
+    console.log("");
+    console.log("📋 LISTA DE ITENS QUE SERÃO EXCLUÍDOS:");
+    console.log("======================================");
+    
+    itensParaExcluir.forEach((item, i) => {
+        console.log(`${i + 1}. Número ${item.numeroBoletim} - ${item.motivo}`);
+        console.log(`   📝 Conteúdo: ${item.texto.substring(0, 100)}...`);
+        console.log("");
+    });
+    
+    /* 5️⃣ Confirma a exclusão */
+    console.log("");
+    console.log("⚠️  ÚLTIMA VERIFICAÇÃO:");
+    console.log("=======================");
+    console.log(`🔄 ${itensParaExcluir.length} itens duplicados serão EXCLUÍDOS`);
+    console.log(`✅ ${itens.length - itensParaExcluir.length} itens únicos serão PRESERVADOS`);
+    console.log("🛡️  GARANTIMOS: Pelo menos 1 cópia de cada conteúdo será mantida!");
+    console.log("");
+    console.log("⏰ Iniciando exclusão automática em 5 segundos...");
+    console.log("🛑 Para CANCELAR, recarregue a página AGORA!");
+    
+    let contador = 5;
+    const intervalo = setInterval(() => {
+        contador--;
+        if (contador > 0) {
+            console.log(`⏱️  ${contador} segundos restantes para cancelar...`);
+        } else {
+            clearInterval(intervalo);
+        }
+    }, 1000);
+    
+    setTimeout(() => {
+        console.log("");
+        console.log("🚀 INICIANDO EXCLUSÃO DE DUPLICATAS:");
+        console.log("====================================");
+        
+        /* 6️⃣ Executa a exclusão com atraso entre cliques */
+        itensParaExcluir.forEach((item, i) => {
+            setTimeout(() => {
+                try {
+                    item.btnApagar.click();
+                    console.log(`✅ Excluído ${i + 1}/${itensParaExcluir.length}: Número ${item.numeroBoletim} (${item.motivo})`);
+                } catch (error) {
+                    console.log(`❌ Erro ao excluir item ${i + 1}: ${error.message}`);
+                }
+            }, i * 800); // 800ms entre cliques para evitar sobrecarga
+        });
+        
+        // Restaura as funções originais após a exclusão
+        setTimeout(() => {
+            window.confirm = window.__oldConfirm;
+            window.alert = window.__oldAlert;
+            console.log("");
+            console.log("🏁 EXCLUSÃO CONCLUÍDA!");
+            console.log("======================");
+            console.log("🔄 Recarregue a página para ver o resultado.");
+        }, itensParaExcluir.length * 800 + 2000);
+        
+            }, 5000);
+    
+    /* FUNÇÃO AUXILIAR: Cria hash do conteúdo para comparação */
+    function criarHashConteudo(texto) {
+        // Remove espaços extras, quebras de linha e caracteres especiais
+        const textoLimpo = texto
+            .replace(/\s+/g, ' ')
+            .replace(/[^\w\s]/g, '')
+            .toLowerCase()
+            .trim();
+        
+        // Cria um hash simples baseado no conteúdo
+        let hash = 0;
+        for (let i = 0; i < textoLimpo.length; i++) {
+            const char = textoLimpo.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Converte para 32bit
+        }
+        return hash.toString();
+    }
+    
+})();
+
+console.log("🚀 Script de exclusão de duplicatas carregado!");
+console.log("📖 O script será executado automaticamente.");
+console.log("⚠️  Certifique-se de estar na página correta do boletim!");
